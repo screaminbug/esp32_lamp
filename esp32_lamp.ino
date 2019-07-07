@@ -28,27 +28,24 @@
 
 #include "secret.h"
 
-const char *GROUP_URL  = "http://" BRIDGE "/api/" API_USERNAME "/groups/" ROOM;
-const char *ACTION_URL = "http://" BRIDGE "/api/" API_USERNAME "/groups/" ROOM "/action";
 const char *LIGHT_STATE = "http://" BRIDGE "/api/" API_USERNAME "/lights/%s";
+const char *LIGHT_PAYLOAD = "{\"on\": %s, \"bri\": %d, \"hue\": %d}";
 
-const String SCENE_DATA = "{\"scene\": \"" SCENE "\"}";
-const String OFF_DATA = "{\"on\": false}";
-
-const int INPUT_PIN = 12;
-const int LED_PIN = 22;
+const char STR_TRUE = "true"
+const char STR_FALSE = "false"
 
 const unsigned int BOUNCE_DELAY_MS = 500; // ms
 
 typedef struct l_state {
-  bool on;
+  bool ison;
   int bri;
   int hue;
 } l_state_t;
 
 l_state_t lights[LIGHTS_COUNT];
 int light_ids[LIGHTS_COUNT];
-
+int input_pins[LIGHTS_COUNT];
+int current_pin_idx = -1;
 
 char msgbuff[50];
 
@@ -91,9 +88,9 @@ void connectToWiFi() {
   nextWifiCheck = millis() + WIFI_CHECK_MS;
 }
 
-void putJson(const char *url, String content) {
+void putJson(const char *url, char *content) {
   Serial.println("putJson");
-  Serial.printf("PUT %s: %s\n", url, content.c_str());
+  Serial.printf("PUT %s: %s\n", url, content);
 
   HTTPClient http;
   http.begin(url);
@@ -123,46 +120,33 @@ String getUrl(const char *url) {
   return http.getString();
 }
 
-void turnLightOn(int id) {
-  sprintf(msgbuff, "Turning light %d on", id);
+char* getOnDataFor(int index) {
+  char jsonbuff = malloc(128);
+  sprintf(jsonbuff, LIGHT_PAYLOAD, lights[index].ison ? STR_TRUE : STR_FALSE, lights[index].bri, lights[index].hue);
+  Serial.printf("Creating json: %s\n", jsonbuff); 
+  return jsonbuff;
+}
+
+void toggleLight(int index) {
+  sprintf(msgbuff, "Turning light %d %s", light_ids[index], lights[index].ison ? "off" : "on");
   Serial.println(msgbuf);
-  putJson(ACTION_URL, ON_DATA, id);
+  char urlbuff[100];
+  sprintf(urlbuff, LIGHT_STATE, id);
+  char *on_data = getOnDataFor(index);
+  putJson(urlbuff, on_data);
+  free(on_data);  
 }
 
-void turnLightOff(int id) {
-  sprintf(msgbuff, "Turning light %d off", id);
-  Serial.println(msgbuff);
-  putJson(ACTION_URL, OFF_DATA, id);
-}
-
-bool isLightOn(int id) {
-  sprintf(msgbuff, "Checking if the light with id %d is on", id);
-  Serial.println(msgbuff);
-  String jsonBody = getUrl(GROUP_URL);
-
-  StaticJsonBuffer<4096> jsonBuffer;
-  JsonObject &root = jsonBuffer.parseObject(jsonBody);
-  bool isOn = root["state"]["any_on"];
-  Serial.printf("isOn: %d\n", isOn);
-  return isOn;
-}
-
-void toggleLights() {
-  if (lightsOn()) {
-    turnLightsOff();
-  } else {
-    turnLightsOn();
-  }
-}
-
-void handleButton() {
+void handleButton(int index) {
   unsigned long currentTime = millis();
   if ((currentTime - lastInterrupt) > BOUNCE_DELAY_MS) {
     Serial.println("Handling button event");
     lastInterrupt = currentTime;
-    shouldTrigger = 1;
+    shouldTrigger = index;
   }
 }
+
+void handleButton0() { handleButton(0);
 
 void getLightsState(int id) {
   char light_state_url[100];
@@ -181,15 +165,17 @@ void readLightsState() {
   }
 }
 
-void populateIds() {
-  char *mutable_str = calloc(strlen(LIGHT_IDS));
+void populateArray(int *array, char *config_str) {
+  char *mutable_str = calloc(strlen(config_str) + 1);
   char delim = ",";
+
+  strcpy(mutable_str, config_str);
 
   char *ptr = strtok(mutableStr, delim);
   int i = 0;
 
   while(ptr != NULL && i < LIGHTS_COUNT) {
-    light_ids[i++] = atoi(ptr);
+    *(array++) = atoi(ptr);
     ptr = strtok(NULL, delim);
   }
 
@@ -201,22 +187,24 @@ void setup() {
   Serial.println("Starting");
 
   lights = calloc(sizeof(l_state_t) * LIGHTS_COUNT);
-  populateIds();
+  populateArray(light_ids, LIGHT_IDS);
+  populateArray(input_pins, BUTTON_PINS);
 
   pinMode(LED_PIN, OUTPUT);
   pinMode(INPUT_PIN, INPUT_PULLUP);
 
   connectToWiFi();
 
+  for (int i=0; i < LIGHTS_COUNT)
   attachInterrupt(digitalPinToInterrupt(INPUT_PIN), handleButton, FALLING);
   Serial.println("Button interrupt enabled");
 }
 
 void loop() {
-  if (shouldTrigger) {
+  if (shouldTrigger != -1) {
     readLightsState();
-    toggleLights();
-    shouldTrigger = 0;
+    toggleLight(light_pins[shouldTrigger]);
+    shouldTrigger = -1;
   }
 
   // Check WiFi status and reconnect if necessary
