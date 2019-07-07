@@ -30,6 +30,7 @@
 
 const char *GROUP_URL  = "http://" BRIDGE "/api/" API_USERNAME "/groups/" ROOM;
 const char *ACTION_URL = "http://" BRIDGE "/api/" API_USERNAME "/groups/" ROOM "/action";
+const char *LIGHT_STATE = "http://" BRIDGE "/api/" API_USERNAME "/lights/%s";
 
 const String SCENE_DATA = "{\"scene\": \"" SCENE "\"}";
 const String OFF_DATA = "{\"on\": false}";
@@ -38,6 +39,18 @@ const int INPUT_PIN = 12;
 const int LED_PIN = 22;
 
 const unsigned int BOUNCE_DELAY_MS = 500; // ms
+
+typedef struct l_state {
+  bool on;
+  int bri;
+  int hue;
+} l_state_t;
+
+l_state_t lights[LIGHTS_COUNT];
+int light_ids[LIGHTS_COUNT];
+
+
+char msgbuff[50];
 
 unsigned long lastInterrupt;  // last interrupt time
 volatile int shouldTrigger = 0;
@@ -110,18 +123,21 @@ String getUrl(const char *url) {
   return http.getString();
 }
 
-void turnLightsOn() {
-  Serial.println("turnLightsOn");
-  putJson(ACTION_URL, SCENE_DATA);
+void turnLightOn(int id) {
+  sprintf(msgbuff, "Turning light %d on", id);
+  Serial.println(msgbuf);
+  putJson(ACTION_URL, ON_DATA, id);
 }
 
-void turnLightsOff() {
-  Serial.println("turnLightsOff");
-  putJson(ACTION_URL, OFF_DATA);
+void turnLightOff(int id) {
+  sprintf(msgbuff, "Turning light %d off", id);
+  Serial.println(msgbuff);
+  putJson(ACTION_URL, OFF_DATA, id);
 }
 
-bool lightsOn() {
-  Serial.println("lightsOn");
+bool isLightOn(int id) {
+  sprintf(msgbuff, "Checking if the light with id %d is on", id);
+  Serial.println(msgbuff);
   String jsonBody = getUrl(GROUP_URL);
 
   StaticJsonBuffer<4096> jsonBuffer;
@@ -148,9 +164,44 @@ void handleButton() {
   }
 }
 
+void getLightsState(int id) {
+  char light_state_url[100];
+  sprintf(light_state_url, LIGHT_STATE, id);
+  String json_body = getUrl(light_state_url);
+  StaticJsonBuffer<1024> json_buffer;
+  JsonObject &root = json_buffer.parseObject(jsonBody);
+  lights[id].on = root["state"]["on"];
+  lights[id].bri = root["state"]["bri"];
+  lights[id].hue = root["state"]["hue"];
+}
+
+void readLightsState() {
+  for (int i=0; i < LIGHTS_COUNT; ++i) {
+    getLightState(light_ids[i]);
+  }
+}
+
+void populateIds() {
+  char *mutable_str = calloc(strlen(LIGHT_IDS));
+  char delim = ",";
+
+  char *ptr = strtok(mutableStr, delim);
+  int i = 0;
+
+  while(ptr != NULL && i < LIGHTS_COUNT) {
+    light_ids[i++] = atoi(ptr);
+    ptr = strtok(NULL, delim);
+  }
+
+  free(mutable_str);
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.println("Starting");
+
+  lights = calloc(sizeof(l_state_t) * LIGHTS_COUNT);
+  populateIds();
 
   pinMode(LED_PIN, OUTPUT);
   pinMode(INPUT_PIN, INPUT_PULLUP);
@@ -163,6 +214,7 @@ void setup() {
 
 void loop() {
   if (shouldTrigger) {
+    readLightsState();
     toggleLights();
     shouldTrigger = 0;
   }
