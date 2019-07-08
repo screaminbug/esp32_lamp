@@ -28,11 +28,18 @@
 
 #include "secret.h"
 
-const char *LIGHT_STATE = "http://" BRIDGE "/api/" API_USERNAME "/lights/%s";
+#define DONT_TRIGGER -1
+
+const char *LIGHT_STATE = "http://" BRIDGE "/api/" API_USERNAME "/lights/%d";
+const char *LIGHT_STATE_PUT = "http://" BRIDGE "/api/" API_USERNAME "/lights/%d/state";
 const char *LIGHT_PAYLOAD = "{\"on\": %s, \"bri\": %d, \"hue\": %d}";
 
-const char STR_TRUE = "true"
-const char STR_FALSE = "false"
+const char *STR_TRUE = "true";
+const char *STR_FALSE = "false";
+
+const int LED_PIN = 2;
+
+const int MAX_INTERRUPT_COUNT = 11;
 
 const unsigned int BOUNCE_DELAY_MS = 500; // ms
 
@@ -42,15 +49,17 @@ typedef struct l_state {
   int hue;
 } l_state_t;
 
+
 l_state_t lights[LIGHTS_COUNT];
 int light_ids[LIGHTS_COUNT];
 int input_pins[LIGHTS_COUNT];
 int current_pin_idx = -1;
 
+
 char msgbuff[50];
 
 unsigned long lastInterrupt;  // last interrupt time
-volatile int shouldTrigger = 0;
+volatile int shouldTrigger = DONT_TRIGGER;
 
 const unsigned int CONNECT_TIMEOUT_MS = 30000;  // WiFi connnection timeout (ms)
 const unsigned int WIFI_CHECK_MS = 30000;       // WiFi status check interval (ms)
@@ -121,7 +130,7 @@ String getUrl(const char *url) {
 }
 
 char* getOnDataFor(int index) {
-  char jsonbuff = malloc(128);
+  char *jsonbuff = (char*) malloc(128);
   sprintf(jsonbuff, LIGHT_PAYLOAD, lights[index].ison ? STR_TRUE : STR_FALSE, lights[index].bri, lights[index].hue);
   Serial.printf("Creating json: %s\n", jsonbuff); 
   return jsonbuff;
@@ -129,9 +138,10 @@ char* getOnDataFor(int index) {
 
 void toggleLight(int index) {
   sprintf(msgbuff, "Turning light %d %s", light_ids[index], lights[index].ison ? "off" : "on");
-  Serial.println(msgbuf);
+  Serial.println(msgbuff);
   char urlbuff[100];
-  sprintf(urlbuff, LIGHT_STATE, id);
+  lights[index].ison = !lights[index].ison;
+  sprintf(urlbuff, LIGHT_STATE_PUT, light_ids[index]);
   char *on_data = getOnDataFor(index);
   putJson(urlbuff, on_data);
   free(on_data);  
@@ -140,38 +150,56 @@ void toggleLight(int index) {
 void handleButton(int index) {
   unsigned long currentTime = millis();
   if ((currentTime - lastInterrupt) > BOUNCE_DELAY_MS) {
-    Serial.println("Handling button event");
+    sprintf(msgbuff, "Handling button event %d", input_pins[index]);
+    Serial.println(msgbuff);
     lastInterrupt = currentTime;
     shouldTrigger = index;
   }
 }
 
-void handleButton0() { handleButton(0);
+void i0() { handleButton(0); }
+void i1() { handleButton(1); }
+void i2() { handleButton(2); }
+void i3() { handleButton(3); }
+void i4() { handleButton(4); }
+void i5() { handleButton(5); }
+void i6() { handleButton(6); }
+void i7() { handleButton(7); }
+void i8() { handleButton(8); }
+void i9() { handleButton(9); }
+void i10() { handleButton(10); }
 
-void getLightsState(int id) {
+void (*interruptHandlers[MAX_INTERRUPT_COUNT])() = {i0, i1, i2, i3, i4, i5, i6, i7, i8, i9, i10};
+
+void getLightState(int id) {
   char light_state_url[100];
   sprintf(light_state_url, LIGHT_STATE, id);
+  Serial.println("Sending to: ");
+  Serial.println(light_state_url);
+  delay(500);
   String json_body = getUrl(light_state_url);
-  StaticJsonBuffer<1024> json_buffer;
-  JsonObject &root = json_buffer.parseObject(jsonBody);
-  lights[id].on = root["state"]["on"];
-  lights[id].bri = root["state"]["bri"];
-  lights[id].hue = root["state"]["hue"];
+  Serial.println(json_body);
+  StaticJsonDocument<1024> doc;
+  deserializeJson(doc, json_body);
+  lights[id].ison = doc["state"]["on"];
+  lights[id].bri = doc["state"]["bri"];
+  lights[id].hue = doc["state"]["hue"];
 }
 
-void readLightsState() {
+void readLightsState(void) {
+  Serial.println("Reading lights states...");
   for (int i=0; i < LIGHTS_COUNT; ++i) {
     getLightState(light_ids[i]);
   }
 }
 
 void populateArray(int *array, char *config_str) {
-  char *mutable_str = calloc(strlen(config_str) + 1);
-  char delim = ",";
+  char *mutable_str = (char *) calloc(strlen(config_str) + 1, sizeof(char));
+  const char *delim = ",";
 
   strcpy(mutable_str, config_str);
 
-  char *ptr = strtok(mutableStr, delim);
+  char *ptr = strtok(mutable_str, delim);
   int i = 0;
 
   while(ptr != NULL && i < LIGHTS_COUNT) {
@@ -186,26 +214,34 @@ void setup() {
   Serial.begin(115200);
   Serial.println("Starting");
 
-  lights = calloc(sizeof(l_state_t) * LIGHTS_COUNT);
+  memset(lights, 0, LIGHTS_COUNT);
   populateArray(light_ids, LIGHT_IDS);
   populateArray(input_pins, BUTTON_PINS);
 
   pinMode(LED_PIN, OUTPUT);
-  pinMode(INPUT_PIN, INPUT_PULLUP);
+  
 
   connectToWiFi();
 
-  for (int i=0; i < LIGHTS_COUNT)
-  attachInterrupt(digitalPinToInterrupt(INPUT_PIN), handleButton, FALLING);
-  Serial.println("Button interrupt enabled");
+  for (int i=0; i < LIGHTS_COUNT && i < MAX_INTERRUPT_COUNT; ++i) {
+    pinMode(input_pins[i], INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(input_pins[i]), interruptHandlers[i], FALLING);
+    sprintf(msgbuff, "Button interrupt enabled for pin %d", input_pins[i]);
+    Serial.println(msgbuff);
+  }
+  
+  
 }
 
 void loop() {
-  if (shouldTrigger != -1) {
+  if (shouldTrigger != DONT_TRIGGER) {
+    Serial.println("A button press detected");
     readLightsState();
-    toggleLight(light_pins[shouldTrigger]);
-    shouldTrigger = -1;
+    toggleLight(shouldTrigger);
+    shouldTrigger = DONT_TRIGGER;
   }
+
+  delay(100);   
 
   // Check WiFi status and reconnect if necessary
   // https://www.reddit.com/r/esp32/comments/7trl0f/reconnect_to_wifi/dtfbfct/
