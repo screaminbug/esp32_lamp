@@ -171,26 +171,20 @@ void i10() { handleButton(10); }
 
 void (*interruptHandlers[MAX_INTERRUPT_COUNT])() = {i0, i1, i2, i3, i4, i5, i6, i7, i8, i9, i10};
 
-void getLightState(int id) {
+void getLightState(int index) {
   char light_state_url[100];
-  sprintf(light_state_url, LIGHT_STATE, id);
-  Serial.println("Sending to: ");
+  sprintf(light_state_url, LIGHT_STATE, light_ids[index]);
+  Serial.println("Sending request to: ");
   Serial.println(light_state_url);
-  delay(500);
   String json_body = getUrl(light_state_url);
   Serial.println(json_body);
   StaticJsonDocument<1024> doc;
   deserializeJson(doc, json_body);
-  lights[id].ison = doc["state"]["on"];
-  lights[id].bri = doc["state"]["bri"];
-  lights[id].hue = doc["state"]["hue"];
-}
-
-void readLightsState(void) {
-  Serial.println("Reading lights states...");
-  for (int i=0; i < LIGHTS_COUNT; ++i) {
-    getLightState(light_ids[i]);
-  }
+  lights[index].ison = doc["state"]["on"];
+  lights[index].bri = doc["state"]["bri"];
+  lights[index].hue = doc["state"]["hue"];
+  sprintf(msgbuff, "Light %d is %s\nBrightness: %d\nHue: %d\n", light_ids[index], lights[index].ison ? "on" : "off", lights[index].bri, lights[index].hue);
+  Serial.println(msgbuff);
 }
 
 void populateArray(int *array, char *config_str) {
@@ -236,12 +230,12 @@ void setup() {
 void loop() {
   if (shouldTrigger != DONT_TRIGGER) {
     Serial.println("A button press detected");
-    readLightsState();
+    getLightState(shouldTrigger);
     toggleLight(shouldTrigger);
     shouldTrigger = DONT_TRIGGER;
   }
 
-  delay(100);   
+  delay(50);   
 
   // Check WiFi status and reconnect if necessary
   // https://www.reddit.com/r/esp32/comments/7trl0f/reconnect_to_wifi/dtfbfct/
